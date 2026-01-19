@@ -1,0 +1,102 @@
+#!/bin/bash
+
+# --- Colores para mensajes ---
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# --- Validar que sea root ---
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}❌ Error: Este script debe ejecutarse como root (usa sudo).${NC}"
+  exit 1
+fi
+
+echo -e "==========================================="
+echo -e "   🛠️  CREADOR DE USUARIOS SFTP v2.0"
+echo -e "==========================================="
+
+# 1. Pedir nombre de usuario
+read -p "Ingresa el nombre del nuevo usuario: " USER_NAME
+
+if [ -z "$USER_NAME" ]; then
+    echo -e "${RED}❌ El nombre no puede estar vacío.${NC}"
+    exit 1
+fi
+
+# Validar si ya existe
+if id "$USER_NAME" &>/dev/null; then
+    echo -e "${RED}❌ El usuario '$USER_NAME' ya existe.${NC}"
+    exit 1
+fi
+
+# 2. Lógica de Contraseña (Manual o Automática)
+echo -e "\n${YELLOW}🔑 Contraseña:${NC}"
+echo "   - Presiona ENTER para generar una aleatoria y segura."
+echo "   - O escribe una contraseña manual."
+read -s -p "Input: " USER_PASS_INPUT
+echo "" # Salto de línea
+
+if [ -z "$USER_PASS_INPUT" ]; then
+    # Generar contraseña aleatoria (12 caracteres, alfanumérica + símbolos seguros)
+    # Usamos openssl y filtramos un poco para evitar caracteres muy raros
+    USER_PASS="Sftp.$(openssl rand -base64 8)!"
+    echo -e "${CYAN}🔄 Generando contraseña aleatoria...${NC}"
+else
+    # Si el usuario escribió algo, pedimos confirmación
+    read -s -p "Confirma la contraseña: " USER_PASS_CONFIRM
+    echo ""
+    
+    if [ "$USER_PASS_INPUT" != "$USER_PASS_CONFIRM" ]; then
+        echo -e "${RED}❌ Las contraseñas no coinciden. Intenta de nuevo.${NC}"
+        exit 1
+    fi
+    USER_PASS=$USER_PASS_INPUT
+fi
+
+# 3. Crear usuario
+echo -e "\n⏳ Creando usuario en el sistema..."
+useradd -m -G sftp_users -s /bin/false "$USER_NAME"
+echo "$USER_NAME:$USER_PASS" | chpasswd
+
+# 4. Estructura de Carpetas
+BASE_DIR="/var/sftp/$USER_NAME"
+
+echo "⏳ Configurando permisos y jaula..."
+
+# A. Carpeta Raíz (JAULA)
+mkdir -p "$BASE_DIR"
+chown root:root "$BASE_DIR"
+chmod 755 "$BASE_DIR"
+
+# B. Carpetas de Trabajo
+mkdir -p "$BASE_DIR/staging"
+mkdir -p "$BASE_DIR/curated"
+
+# C. Permisos finales
+chown "$USER_NAME":sftp_users "$BASE_DIR/staging"
+chown "$USER_NAME":sftp_users "$BASE_DIR/curated"
+
+# Obtener IP Pública (Intento rápido, si falla muestra mensaje genérico)
+PUBLIC_IP=$(curl -s -m 2 ifconfig.me || echo "IP_DEL_SERVIDOR")
+
+# --- RESUMEN FINAL PARA COPIAR ---
+echo -e "\n"
+echo -e "${GREEN}✅ USUARIO CREADO CON ÉXITO${NC}"
+echo "------------------------------------------------------------"
+echo " ✂️  COPIA Y PEGA ESTO PARA EL USUARIO  ✂️"
+echo "------------------------------------------------------------"
+echo "📂 DATOS DE CONEXIÓN SFTP"
+echo ""
+echo "   Host/Servidor : $PUBLIC_IP"
+echo "   Puerto        : 22"
+echo "   Usuario       : $USER_NAME"
+echo "   Contraseña    : $USER_PASS"
+echo ""
+echo "📂 RUTAS DISPONIBLES:"
+echo "   /staging  -> Para subir archivos (Upload)"
+echo "   /curated  -> Para descargar procesados (Download)"
+echo "------------------------------------------------------------"
+echo -e "${YELLOW}⚠️  Nota: Guarda esta contraseña, no se podrá ver después.${NC}"
+echo ""
