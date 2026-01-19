@@ -55,6 +55,12 @@ else
     USER_PASS=$USER_PASS_INPUT
 fi
 
+# --- Verificar que exista el grupo ---
+if ! getent group sftp_users > /dev/null; then
+    echo -e "${YELLOW}⚠️  El grupo 'sftp_users' no existe. Creándolo...${NC}"
+    groupadd sftp_users
+fi
+
 # 3. Crear usuario
 echo -e "\n⏳ Creando usuario en el sistema..."
 useradd -m -G sftp_users -s /bin/false "$USER_NAME"
