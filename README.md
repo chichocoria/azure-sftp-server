@@ -1,3 +1,6 @@
+![Diagrama](sftp_server.png)
+
+
 # ☁️ Azure SFTP Server (IaaS) - Cost Optimized
 
 Este repositorio contiene las herramientas necesarias para desplegar y administrar un servidor **SFTP seguro y económico** en Azure utilizando una Máquina Virtual (Ubuntu).
@@ -159,7 +162,3 @@ Cada usuario verá únicamente su propia carpeta con la siguiente estructura:
 ---
 
 **Autor:** [chichocoria]
-
-```
-
-```
