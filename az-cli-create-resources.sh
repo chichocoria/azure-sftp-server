@@ -1,12 +1,14 @@
 #!/bin/bash
 
 # --- Variables de Configuración ---
-RESOURCE_GROUP="rg-lab-sftp-manual"
+RESOURCE_GROUP="rg-lab-sftp-demo"
 LOCATION="eastus2"
-VNET_NAME="vnet-sftp-manual"
+VNET_NAME="vnet-sftp-demo"
 SUBNET_NAME="subnet-sftp"
-NSG_NAME="nsg-sftp-manual"
-VM_NAME="vm-sftp-manual"
+NSG_NAME="nsg-sftp-demo"
+VM_NAME="vm-sftp-demo"
+# Definimos nombre para el disco de datos para poder gestionarlo independientemente
+DATA_DISK_NAME="${VM_NAME}-data-disk" 
 ADMIN_USERNAME="sftpadmin"
 DATA_DISK_SIZE=512
 
@@ -30,7 +32,6 @@ crear_recursos() {
     fi
 
     # 2. Verificar/Crear Red y Seguridad
-    # Verificamos si la VNET existe consultando su ID
     VNET_ID=$(az network vnet show --name $VNET_NAME --resource-group $RESOURCE_GROUP --query id -o tsv 2>/dev/null)
 
     if [ -n "$VNET_ID" ]; then
@@ -43,7 +44,26 @@ crear_recursos() {
         echo -e "${GREEN}✅ Red Configurada.${NC}"
     fi
 
-    # 3. Verificar/Crear VM + Disco
+    # 3. Verificar/Crear Disco de Datos (Standard SSD)
+    # MODIFICACIÓN: Verificamos y creamos el disco por separado para controlar el SKU
+    DISK_ID=$(az disk show --resource-group $RESOURCE_GROUP --name $DATA_DISK_NAME --query id -o tsv 2>/dev/null)
+
+    if [ -n "$DISK_ID" ]; then
+        echo -e "✅ El disco de datos '$DATA_DISK_NAME' ya existe."
+    else
+        echo "⏳ Creando Disco Gestionado Standard SSD LRS de $DATA_DISK_SIZE GB..."
+        # Aquí es donde definimos explícitamente el SKU
+        az disk create \
+            --resource-group $RESOURCE_GROUP \
+            --name $DATA_DISK_NAME \
+            --size-gb $DATA_DISK_SIZE \
+            --sku StandardSSD_LRS \
+            --location $LOCATION \
+            --output none
+        echo -e "${GREEN}✅ Disco Standard SSD creado.${NC}"
+    fi
+
+    # 4. Verificar/Crear VM + Adjuntar Disco
     VM_ID=$(az vm show --name $VM_NAME --resource-group $RESOURCE_GROUP --query id -o tsv 2>/dev/null)
 
     if [ -n "$VM_ID" ]; then
@@ -51,7 +71,7 @@ crear_recursos() {
     else
         # SOLO pedimos contraseña si vamos a crear la VM nueva
         if [ -z "$ADMIN_PASSWORD" ]; then
-            DEFAULT_PASS="Manual.$(openssl rand -base64 6)!" 
+            DEFAULT_PASS="demo.$(openssl rand -base64 6)!" 
             echo ""
             echo -e "${YELLOW}🔑 Configuración de Credenciales:${NC}"
             read -s -p "Password Admin VM (Enter para auto): " INPUT_PASS
@@ -64,7 +84,8 @@ crear_recursos() {
             fi
         fi
 
-        echo "⏳ Creando VM + Disco de $DATA_DISK_SIZE GB (Esto toma unos minutos)..."
+        echo "⏳ Creando VM y adjuntando disco (Esto toma unos minutos)..."
+        # MODIFICACIÓN: Usamos --attach-data-disks en lugar de --data-disk-sizes-gb
         az vm create \
             --resource-group $RESOURCE_GROUP \
             --name $VM_NAME \
@@ -76,12 +97,12 @@ crear_recursos() {
             --subnet $SUBNET_NAME \
             --nsg $NSG_NAME \
             --public-ip-sku Standard \
-            --data-disk-sizes-gb $DATA_DISK_SIZE \
+            --attach-data-disks $DATA_DISK_NAME \
             --output none
-        echo -e "${GREEN}✅ VM Desplegada correctamente.${NC}"
+        echo -e "${GREEN}✅ VM Desplegada correctamente con Standard SSD.${NC}"
     fi
 
-    # 4. Datos Finales (Siempre los mostramos, aunque la VM ya existiera)
+    # 5. Datos Finales
     IP_PUBLICA=$(az vm show -d -g $RESOURCE_GROUP -n $VM_NAME --query publicIps -o tsv)
     
     echo ""
@@ -90,13 +111,14 @@ crear_recursos() {
     echo "=========================================="
     echo " IP Pública:  $IP_PUBLICA"
     echo " Usuario:     $ADMIN_USERNAME"
+    echo " Disco Datos: $DATA_DISK_NAME (StandardSSD_LRS / ${DATA_DISK_SIZE}GB)"
     if [ -n "$ADMIN_PASSWORD" ]; then
         echo " Password:    $ADMIN_PASSWORD"
     else
         echo " Password:    (La que configuraste previamente)"
     fi
     echo "=========================================="
-    echo "AHORA: Conéctate por SSH y configura el SFTP manualmente."
+    echo "AHORA: Conéctate por SSH y configura el SFTP."
 }
 
 # --- Función 2: Borrar Recursos ---
@@ -104,7 +126,7 @@ borrar_recursos() {
     echo ""
     echo -e "${RED}⚠️  ¡ADVERTENCIA! ⚠️${NC}"
     echo "Vas a eliminar el Grupo de Recursos: $RESOURCE_GROUP"
-    echo "Esto borrará la VM, el Disco de 512GB, la IP y la Red."
+    echo "Esto borrará la VM, el Disco de 512GB (Standard SSD), la IP y la Red."
     echo ""
     read -p "¿Estás seguro de continuar? (s/n): " CONFIRM
     
