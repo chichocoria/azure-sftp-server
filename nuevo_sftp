@@ -170,7 +170,7 @@ crear_admin() {
 while true; do
     clear
     echo -e "==========================================="
-    echo -e "   🛠️  GESTOR SFTP v5.0 (Con Logs)"
+    echo -e "   🛠️  GESTOR SFTP v5.0 "
     echo -e "==========================================="
     echo "1. Crear Cliente SFTP"
     echo "2. Bloquear Cliente (Lock)"
