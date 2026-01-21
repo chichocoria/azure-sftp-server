@@ -13,96 +13,147 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-echo -e "==========================================="
-echo -e "   🛠️  CREADOR DE USUARIOS SFTP v2.0"
-echo -e "==========================================="
+# ==========================================
+#  FUNCIONES DEL SISTEMA
+# ==========================================
 
-# 1. Pedir nombre de usuario
-read -p "Ingresa el nombre del nuevo usuario: " USER_NAME
-
-if [ -z "$USER_NAME" ]; then
-    echo -e "${RED}❌ El nombre no puede estar vacío.${NC}"
-    exit 1
-fi
-
-# Validar si ya existe
-if id "$USER_NAME" &>/dev/null; then
-    echo -e "${RED}❌ El usuario '$USER_NAME' ya existe.${NC}"
-    exit 1
-fi
-
-# 2. Lógica de Contraseña (Manual o Automática)
-echo -e "\n${YELLOW}🔑 Contraseña:${NC}"
-echo "   - Presiona ENTER para generar una aleatoria y segura."
-echo "   - O escribe una contraseña manual."
-read -s -p "Input: " USER_PASS_INPUT
-echo "" # Salto de línea
-
-if [ -z "$USER_PASS_INPUT" ]; then
-    # Generar contraseña aleatoria (12 caracteres, alfanumérica + símbolos seguros)
-    # Usamos openssl y filtramos un poco para evitar caracteres muy raros
-    USER_PASS="Sftp.$(openssl rand -base64 8)!"
-    echo -e "${CYAN}🔄 Generando contraseña aleatoria...${NC}"
-else
-    # Si el usuario escribió algo, pedimos confirmación
-    read -s -p "Confirma la contraseña: " USER_PASS_CONFIRM
-    echo ""
+# --- FUNCIÓN 1: CREAR USUARIO ---
+crear_usuario() {
+    echo -e "\n${CYAN}--- CREAR NUEVO USUARIO SFTP ---${NC}"
     
-    if [ "$USER_PASS_INPUT" != "$USER_PASS_CONFIRM" ]; then
-        echo -e "${RED}❌ Las contraseñas no coinciden. Intenta de nuevo.${NC}"
-        exit 1
+    # 1. Pedir nombre
+    read -p "Ingresa el nombre del nuevo usuario: " USER_NAME
+
+    if [ -z "$USER_NAME" ]; then
+        echo -e "${RED}❌ El nombre no puede estar vacío.${NC}"
+        return
     fi
-    USER_PASS=$USER_PASS_INPUT
-fi
 
-# --- Verificar que exista el grupo ---
-if ! getent group sftp_users > /dev/null; then
-    echo -e "${YELLOW}⚠️  El grupo 'sftp_users' no existe. Creándolo...${NC}"
-    groupadd sftp_users
-fi
+    # Validar si ya existe
+    if id "$USER_NAME" &>/dev/null; then
+        echo -e "${RED}❌ El usuario '$USER_NAME' ya existe.${NC}"
+        return
+    fi
 
-# 3. Crear usuario
-echo -e "\n⏳ Creando usuario en el sistema..."
-useradd -m -G sftp_users -s /bin/false "$USER_NAME"
-echo "$USER_NAME:$USER_PASS" | chpasswd
+    # 2. Contraseña
+    echo -e "\n${YELLOW}🔑 Contraseña:${NC}"
+    echo "   - Presiona ENTER para generar una aleatoria."
+    echo "   - O escribe una manual."
+    read -s -p "Input: " USER_PASS_INPUT
+    echo "" 
 
-# 4. Estructura de Carpetas
-BASE_DIR="/var/sftp/$USER_NAME"
+    if [ -z "$USER_PASS_INPUT" ]; then
+        USER_PASS="Sftp.$(openssl rand -base64 8)!"
+        echo -e "${CYAN}🔄 Generando contraseña aleatoria...${NC}"
+    else
+        read -s -p "Confirma la contraseña: " USER_PASS_CONFIRM
+        echo ""
+        if [ "$USER_PASS_INPUT" != "$USER_PASS_CONFIRM" ]; then
+            echo -e "${RED}❌ Las contraseñas no coinciden.${NC}"
+            return
+        fi
+        USER_PASS=$USER_PASS_INPUT
+    fi
 
-echo "⏳ Configurando permisos y jaula..."
+    # Verificar grupo
+    if ! getent group sftp_users > /dev/null; then
+        echo -e "${YELLOW}⚠️  El grupo 'sftp_users' no existe. Creándolo...${NC}"
+        groupadd sftp_users
+    fi
 
-# A. Carpeta Raíz (JAULA)
-mkdir -p "$BASE_DIR"
-chown root:root "$BASE_DIR"
-chmod 755 "$BASE_DIR"
+    # 3. Crear usuario
+    echo -e "⏳ Creando usuario..."
+    useradd -m -G sftp_users -s /bin/false "$USER_NAME"
+    echo "$USER_NAME:$USER_PASS" | chpasswd
 
-# B. Carpetas de Trabajo
-mkdir -p "$BASE_DIR/staging"
-mkdir -p "$BASE_DIR/curated"
+    # 4. Carpetas y Permisos
+    BASE_DIR="/var/sftp/$USER_NAME"
+    mkdir -p "$BASE_DIR"
+    chown root:root "$BASE_DIR"
+    chmod 755 "$BASE_DIR"
 
-# C. Permisos finales
-chown "$USER_NAME":sftp_users "$BASE_DIR/staging"
-chown "$USER_NAME":sftp_users "$BASE_DIR/curated"
+    mkdir -p "$BASE_DIR/staging"
+    mkdir -p "$BASE_DIR/curated"
+    chown "$USER_NAME":sftp_users "$BASE_DIR/staging"
+    chown "$USER_NAME":sftp_users "$BASE_DIR/curated"
 
-# Obtener IP Pública (Intento rápido, si falla muestra mensaje genérico)
-PUBLIC_IP=$(curl -s -m 2 ifconfig.me || echo "IP_DEL_SERVIDOR")
+    # Resumen
+    PUBLIC_IP=$(curl -s -m 2 ifconfig.me || echo "IP_DEL_SERVIDOR")
+    echo -e "\n${GREEN}✅ USUARIO CREADO${NC}"
+    echo "------------------------------------------------------------"
+    echo " ✂️  DATOS PARA EL CLIENTE  ✂️"
+    echo "------------------------------------------------------------"
+    echo "   Host       : $PUBLIC_IP"
+    echo "   Usuario    : $USER_NAME"
+    echo "   Contraseña : $USER_PASS"
+    echo "------------------------------------------------------------"
+    echo -e "${YELLOW}⚠️  Guarda la contraseña, no se mostrará de nuevo.${NC}"
+    
+    # Pausa para leer
+    read -p "Presiona Enter para volver al menú..."
+}
 
-# --- RESUMEN FINAL PARA COPIAR ---
-echo -e "\n"
-echo -e "${GREEN}✅ USUARIO CREADO CON ÉXITO${NC}"
-echo "------------------------------------------------------------"
-echo " ✂️  COPIA Y PEGA ESTO PARA EL USUARIO  ✂️"
-echo "------------------------------------------------------------"
-echo "📂 DATOS DE CONEXIÓN SFTP"
-echo ""
-echo "   Host/Servidor : $PUBLIC_IP"
-echo "   Puerto        : 22"
-echo "   Usuario       : $USER_NAME"
-echo "   Contraseña    : $USER_PASS"
-echo ""
-echo "📂 RUTAS DISPONIBLES:"
-echo "   /staging  -> Para subir archivos (Upload)"
-echo "   /curated  -> Para descargar procesados (Download)"
-echo "------------------------------------------------------------"
-echo -e "${YELLOW}⚠️  Nota: Guarda esta contraseña, no se podrá ver después.${NC}"
-echo ""
+# --- FUNCIÓN 2: DESACTIVAR USUARIO ---
+desactivar_usuario() {
+    echo -e "\n${RED}--- DESACTIVAR USUARIO (BLOQUEAR ACCESO) ---${NC}"
+    read -p "Nombre del usuario a bloquear: " USER_NAME
+
+    # Validaciones
+    if [ -z "$USER_NAME" ]; then echo -e "${RED}❌ Nombre vacío.${NC}"; return; fi
+    if ! id "$USER_NAME" &>/dev/null; then echo -e "${RED}❌ El usuario no existe.${NC}"; return; fi
+
+    # Acción: Lock password
+    usermod -L "$USER_NAME"
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✅ El usuario '$USER_NAME' ha sido desactivado.${NC}"
+        echo "   (Su contraseña ha sido bloqueada, pero sus archivos siguen ahí)."
+    else
+        echo -e "${RED}❌ Error al desactivar usuario.${NC}"
+    fi
+    read -p "Presiona Enter para continuar..."
+}
+
+# --- FUNCIÓN 3: REACTIVAR USUARIO ---
+reactivar_usuario() {
+    echo -e "\n${GREEN}--- REACTIVAR USUARIO (DESBLOQUEAR) ---${NC}"
+    read -p "Nombre del usuario a reactivar: " USER_NAME
+
+    if [ -z "$USER_NAME" ]; then echo -e "${RED}❌ Nombre vacío.${NC}"; return; fi
+    if ! id "$USER_NAME" &>/dev/null; then echo -e "${RED}❌ El usuario no existe.${NC}"; return; fi
+
+    # Acción: Unlock password
+    usermod -U "$USER_NAME"
+
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✅ El usuario '$USER_NAME' ha sido reactivado.${NC}"
+        echo "   (Ahora puede volver a conectarse con su contraseña anterior)."
+    else
+        echo -e "${RED}❌ Error al reactivar usuario.${NC}"
+    fi
+    read -p "Presiona Enter para continuar..."
+}
+
+# ==========================================
+#  MENÚ PRINCIPAL
+# ==========================================
+while true; do
+    clear
+    echo -e "==========================================="
+    echo -e "   🛠️  GESTOR DE USUARIOS SFTP v3.0"
+    echo -e "==========================================="
+    echo "1. Crear nuevo usuario"
+    echo "2. Desactivar usuario (Lock)"
+    echo "3. Reactivar usuario (Unlock)"
+    echo "4. Salir"
+    echo "-------------------------------------------"
+    read -p "Elige una opción: " opc
+
+    case $opc in
+        1) crear_usuario ;;
+        2) desactivar_usuario ;;
+        3) reactivar_usuario ;;
+        4) echo "Adiós 👋"; exit 0 ;;
+        *) echo -e "${RED}Opción inválida.${NC}"; sleep 1 ;;
+    esac
+done
