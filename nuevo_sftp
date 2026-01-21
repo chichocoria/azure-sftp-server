@@ -1,137 +1,167 @@
 #!/bin/bash
 
-# --- Colores para mensajes ---
+# --- Configuración de Logs ---
+LOG_FILE="/var/log/sftp_manager.log"
+
+# --- Colores ---
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# --- Validar que sea root ---
+# --- Validar Root ---
 if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}❌ Error: Este script debe ejecutarse como root (usa sudo).${NC}"
+  echo -e "${RED}❌ Error: Este script debe ejecutarse como root (sudo).${NC}"
   exit 1
 fi
 
 # ==========================================
-#  FUNCIONES DEL SISTEMA
+#  SISTEMA DE LOGS
+# ==========================================
+# Función interna para escribir en el archivo de log
+registrar_evento() {
+    local TIPO=$1
+    local MENSAJE=$2
+    local FECHA=$(date '+%Y-%m-%d %H:%M:%S')
+    # Formato: [FECHA] [TIPO] Mensaje
+    echo "[$FECHA] [$TIPO] $MENSAJE" >> "$LOG_FILE"
+}
+
+# Crear el archivo de log si no existe
+if [ ! -f "$LOG_FILE" ]; then
+    touch "$LOG_FILE"
+    chmod 640 "$LOG_FILE"
+    registrar_evento "SYSTEM" "Archivo de log inicializado."
+fi
+
+# ==========================================
+#  FUNCIONES DE GESTIÓN
 # ==========================================
 
-# --- FUNCIÓN 1: CREAR USUARIO ---
+# 1. CREAR USUARIO
 crear_usuario() {
     echo -e "\n${CYAN}--- CREAR NUEVO USUARIO SFTP ---${NC}"
-    
-    # 1. Pedir nombre
-    read -p "Ingresa el nombre del nuevo usuario: " USER_NAME
+    read -p "Nombre del usuario: " USER_NAME
 
-    if [ -z "$USER_NAME" ]; then
-        echo -e "${RED}❌ El nombre no puede estar vacío.${NC}"
-        return
-    fi
+    if [ -z "$USER_NAME" ]; then echo -e "${RED}❌ Nombre vacío.${NC}"; return; fi
+    if id "$USER_NAME" &>/dev/null; then echo -e "${RED}❌ Ya existe.${NC}"; return; fi
 
-    # Validar si ya existe
-    if id "$USER_NAME" &>/dev/null; then
-        echo -e "${RED}❌ El usuario '$USER_NAME' ya existe.${NC}"
-        return
-    fi
-
-    # 2. Contraseña
-    echo -e "\n${YELLOW}🔑 Contraseña:${NC}"
-    echo "   - Presiona ENTER para generar una aleatoria."
-    echo "   - O escribe una manual."
+    # Contraseña
+    echo -e "${YELLOW}🔑 Contraseña (Enter para automática):${NC}"
     read -s -p "Input: " USER_PASS_INPUT
     echo "" 
 
     if [ -z "$USER_PASS_INPUT" ]; then
         USER_PASS="Sftp.$(openssl rand -base64 8)!"
-        echo -e "${CYAN}🔄 Generando contraseña aleatoria...${NC}"
     else
-        read -s -p "Confirma la contraseña: " USER_PASS_CONFIRM
+        read -s -p "Confirma: " USER_PASS_CONFIRM
         echo ""
         if [ "$USER_PASS_INPUT" != "$USER_PASS_CONFIRM" ]; then
-            echo -e "${RED}❌ Las contraseñas no coinciden.${NC}"
-            return
+            echo -e "${RED}❌ No coinciden.${NC}"; return
         fi
         USER_PASS=$USER_PASS_INPUT
     fi
 
-    # Verificar grupo
+    # Grupo
     if ! getent group sftp_users > /dev/null; then
-        echo -e "${YELLOW}⚠️  El grupo 'sftp_users' no existe. Creándolo...${NC}"
         groupadd sftp_users
+        registrar_evento "SYSTEM" "Grupo sftp_users creado."
     fi
 
-    # 3. Crear usuario
-    echo -e "⏳ Creando usuario..."
+    # Creación
+    echo "⏳ Creando..."
     useradd -m -G sftp_users -s /bin/false "$USER_NAME"
     echo "$USER_NAME:$USER_PASS" | chpasswd
 
-    # 4. Carpetas y Permisos
+    # Carpetas
     BASE_DIR="/var/sftp/$USER_NAME"
-    mkdir -p "$BASE_DIR"
+    mkdir -p "$BASE_DIR/staging" "$BASE_DIR/curated"
     chown root:root "$BASE_DIR"
     chmod 755 "$BASE_DIR"
+    chown "$USER_NAME":sftp_users "$BASE_DIR/staging" "$BASE_DIR/curated"
 
-    mkdir -p "$BASE_DIR/staging"
-    mkdir -p "$BASE_DIR/curated"
-    chown "$USER_NAME":sftp_users "$BASE_DIR/staging"
-    chown "$USER_NAME":sftp_users "$BASE_DIR/curated"
-
-    # Resumen
+    # Log y Salida
+    registrar_evento "CREATE" "Usuario creado: $USER_NAME"
+    
     PUBLIC_IP=$(curl -s -m 2 ifconfig.me || echo "IP_DEL_SERVIDOR")
     echo -e "\n${GREEN}✅ USUARIO CREADO${NC}"
-    echo "------------------------------------------------------------"
-    echo " ✂️  DATOS PARA EL CLIENTE  ✂️"
-    echo "------------------------------------------------------------"
-    echo "   Host       : $PUBLIC_IP"
-    echo "   Usuario    : $USER_NAME"
-    echo "   Contraseña : $USER_PASS"
-    echo "------------------------------------------------------------"
-    echo -e "${YELLOW}⚠️  Guarda la contraseña, no se mostrará de nuevo.${NC}"
-    
-    # Pausa para leer
-    read -p "Presiona Enter para volver al menú..."
+    echo "------------------------------------------------"
+    echo " Host: $PUBLIC_IP | User: $USER_NAME | Pass: $USER_PASS"
+    echo "------------------------------------------------"
+    read -p "Enter para volver..."
 }
 
-# --- FUNCIÓN 2: DESACTIVAR USUARIO ---
+# 2. DESACTIVAR
 desactivar_usuario() {
-    echo -e "\n${RED}--- DESACTIVAR USUARIO (BLOQUEAR ACCESO) ---${NC}"
-    read -p "Nombre del usuario a bloquear: " USER_NAME
+    echo -e "\n${RED}--- BLOQUEAR USUARIO ---${NC}"
+    read -p "Usuario a bloquear: " USER_NAME
+    if ! id "$USER_NAME" &>/dev/null; then echo -e "${RED}❌ No existe.${NC}"; return; fi
 
-    # Validaciones
-    if [ -z "$USER_NAME" ]; then echo -e "${RED}❌ Nombre vacío.${NC}"; return; fi
-    if ! id "$USER_NAME" &>/dev/null; then echo -e "${RED}❌ El usuario no existe.${NC}"; return; fi
-
-    # Acción: Lock password
     usermod -L "$USER_NAME"
-    
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✅ El usuario '$USER_NAME' ha sido desactivado.${NC}"
-        echo "   (Su contraseña ha sido bloqueada, pero sus archivos siguen ahí)."
-    else
-        echo -e "${RED}❌ Error al desactivar usuario.${NC}"
-    fi
-    read -p "Presiona Enter para continuar..."
+    registrar_evento "LOCK" "Usuario bloqueado: $USER_NAME"
+    echo -e "${GREEN}✅ Usuario $USER_NAME bloqueado.${NC}"
+    read -p "Enter para volver..."
 }
 
-# --- FUNCIÓN 3: REACTIVAR USUARIO ---
+# 3. REACTIVAR
 reactivar_usuario() {
-    echo -e "\n${GREEN}--- REACTIVAR USUARIO (DESBLOQUEAR) ---${NC}"
-    read -p "Nombre del usuario a reactivar: " USER_NAME
+    echo -e "\n${GREEN}--- DESBLOQUEAR USUARIO ---${NC}"
+    read -p "Usuario a desbloquear: " USER_NAME
+    if ! id "$USER_NAME" &>/dev/null; then echo -e "${RED}❌ No existe.${NC}"; return; fi
 
-    if [ -z "$USER_NAME" ]; then echo -e "${RED}❌ Nombre vacío.${NC}"; return; fi
+    usermod -U "$USER_NAME"
+    registrar_evento "UNLOCK" "Usuario desbloqueado: $USER_NAME"
+    echo -e "${GREEN}✅ Usuario $USER_NAME reactivado.${NC}"
+    read -p "Enter para volver..."
+}
+
+# 4. LIMPIAR CARPETAS (NUEVO)
+limpiar_carpetas() {
+    echo -e "\n${YELLOW}--- 🧹 LIMPIAR ARCHIVOS DE USUARIO ---${NC}"
+    echo "Esto borrará TODO el contenido en /staging y /curated del usuario."
+    read -p "Nombre del usuario objetivo: " USER_NAME
+
     if ! id "$USER_NAME" &>/dev/null; then echo -e "${RED}❌ El usuario no existe.${NC}"; return; fi
 
-    # Acción: Unlock password
-    usermod -U "$USER_NAME"
+    # Confirmación de seguridad
+    echo -e "${RED}⚠️  ¡ATENCIÓN! ESTA ACCIÓN ES IRREVERSIBLE.${NC}"
+    read -p "¿Estás seguro de borrar los archivos de $USER_NAME? (s/n): " CONFIRM
 
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✅ El usuario '$USER_NAME' ha sido reactivado.${NC}"
-        echo "   (Ahora puede volver a conectarse con su contraseña anterior)."
+    if [[ "$CONFIRM" == "s" || "$CONFIRM" == "S" ]]; then
+        echo "⏳ Borrando archivos..."
+        
+        # Borramos contenido, pero no la carpeta en sí
+        rm -rf /var/sftp/"$USER_NAME"/staging/*
+        rm -rf /var/sftp/"$USER_NAME"/curated/*
+        
+        # Log del evento
+        registrar_evento "DELETE_FILES" "Archivos eliminados para el usuario: $USER_NAME"
+        
+        echo -e "${GREEN}✅ Limpieza completada.${NC}"
     else
-        echo -e "${RED}❌ Error al reactivar usuario.${NC}"
+        echo "❌ Operación cancelada."
     fi
-    read -p "Presiona Enter para continuar..."
+    read -p "Enter para volver..."
+}
+
+# 5. CREAR ADMIN
+crear_admin() {
+    echo -e "\n${CYAN}--- CREAR ADMIN (SUPERVISOR) ---${NC}"
+    read -p "Nombre admin: " ADMIN_NAME
+    if id "$ADMIN_NAME" &>/dev/null; then echo -e "${RED}❌ Ya existe.${NC}"; return; fi
+    
+    read -s -p "Password: " P1; echo ""
+    read -s -p "Confirmar: " P2; echo ""
+    
+    if [ "$P1" != "$P2" ]; then echo "No coinciden"; return; fi
+
+    useradd -m -s /bin/bash -G sudo "$ADMIN_NAME"
+    echo "$ADMIN_NAME:$P1" | chpasswd
+    
+    registrar_evento "CREATE_ADMIN" "Administrador creado: $ADMIN_NAME"
+    echo -e "${GREEN}✅ Admin creado.${NC}"
+    read -p "Enter para volver..."
 }
 
 # ==========================================
@@ -140,20 +170,26 @@ reactivar_usuario() {
 while true; do
     clear
     echo -e "==========================================="
-    echo -e "   🛠️  GESTOR DE USUARIOS SFTP v3.0"
+    echo -e "   🛠️  GESTOR SFTP v5.0 (Con Logs)"
     echo -e "==========================================="
-    echo "1. Crear nuevo usuario"
-    echo "2. Desactivar usuario (Lock)"
-    echo "3. Reactivar usuario (Unlock)"
-    echo "4. Salir"
+    echo "1. Crear Cliente SFTP"
+    echo "2. Bloquear Cliente (Lock)"
+    echo "3. Desbloquear Cliente (Unlock)"
+    echo "4. Crear Administrador"
+    echo -e "${YELLOW}5. Limpiar archivos de usuario (Borrar)${NC}"
+    echo "6. Ver Logs (Últimos 10 eventos)"
+    echo "7. Salir"
     echo "-------------------------------------------"
-    read -p "Elige una opción: " opc
+    read -p "Opción: " opc
 
     case $opc in
         1) crear_usuario ;;
         2) desactivar_usuario ;;
         3) reactivar_usuario ;;
-        4) echo "Adiós 👋"; exit 0 ;;
-        *) echo -e "${RED}Opción inválida.${NC}"; sleep 1 ;;
+        4) crear_admin ;;
+        5) limpiar_carpetas ;;
+        6) echo ""; tail -n 10 "$LOG_FILE"; read -p "Enter..." ;;
+        7) exit 0 ;;
+        *) echo "Opción inválida." ;;
     esac
 done
